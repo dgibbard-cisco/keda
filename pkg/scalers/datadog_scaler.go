@@ -270,10 +270,6 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 
 	series := resp.GetSeries()
 
-	if len(series) > 1 {
-		return 0, fmt.Errorf("query returned more than 1 series; modify the query to return only 1 series")
-	}
-
 	if len(series) == 0 {
 		if !s.metadata.useFiller {
 			return 0, fmt.Errorf("no Datadog metrics returned for the given time window")
@@ -281,18 +277,45 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		return s.metadata.fillValue, nil
 	}
 
-	points := series[0].GetPointlist()
-
-	if len(points) == 0 || len(points[0]) < 2 {
-		if !s.metadata.useFiller {
-			return 0, fmt.Errorf("no Datadog metrics returned for the given time window")
+	// Collect all latest point values from any/all series
+	results := make([]float64, len(series))
+	for i := 0; i < len(series); i++ {
+		points := series[i].GetPointlist()
+		if len(points) == 0 || len(points[0]) < 2 {
+			if !s.metadata.useFiller {
+				return 0, fmt.Errorf("no Datadog metrics returned for the given time window")
+			}
+			return s.metadata.fillValue, nil
 		}
-		return s.metadata.fillValue, nil
+		// Return the last point from the series
+		index := len(points) - 1
+		results[i] = float64(*points[index][1])
 	}
 
-	// Return the last point from the series
-	index := len(points) - 1
-	return *points[index][1], nil
+	// Todo: Allow user-defined aggregator and/or set default to Max
+	// Todo: Use correct aggregator function based on config
+	// Todo: See if there's methods already available for min/max/avg/median etc, without writing our own.
+
+	// Aggregate Results - default Max value:
+	return MaxFromSlices(results)
+}
+
+func MaxFromSlices(results []float64) (float64, error) {
+	max := results[0]
+	for _, result := range results {
+		if result > max {
+			max = result
+		}
+	}
+	return max, nil
+}
+
+func AvgFromSlices(results []float64) (float64, error) {
+	total := 0.0
+	for _, result := range results {
+		total += result
+	}
+	return total / float64(len(results)), nil
 }
 
 // GetMetricSpecForScaling returns the MetricSpec for the Horizontal Pod Autoscaler
