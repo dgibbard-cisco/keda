@@ -292,9 +292,12 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		results[i] = float64(*points[index][1])
 	}
 
-	// Todo: Allow user-defined aggregator and/or set default to Max
-	// Todo: Use correct aggregator function based on config
+	// Todo: Allow user-defined aggregator and/or set default to Max (config)
+	// Todo: Use correct aggregator function here, based on config
 	// Todo: See if there's methods already available for min/max/avg/median etc, without writing our own.
+	// Todo: Add tests
+	// Todo: Update docs with example / info on aggregation
+	// Todo: Changelog
 
 	// Aggregate Results - default Max value:
 	return MaxFromSlices(results)
