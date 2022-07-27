@@ -28,6 +28,7 @@ type datadogMetadata struct {
 	datadogSite          string
 	query                string
 	queryValue           float64
+	queryAggegrator      string
 	activationQueryValue float64
 	vType                v2beta2.MetricTargetType
 	metricName           string
@@ -35,6 +36,9 @@ type datadogMetadata struct {
 	useFiller            bool
 	fillValue            float64
 }
+
+const maxString = "max"
+const avgString = "average"
 
 var datadogLog = logf.Log.WithName("datadog_scaler")
 
@@ -109,6 +113,20 @@ func parseDatadogMetadata(config *ScalerConfig) (*datadogMetadata, error) {
 		return nil, fmt.Errorf("no queryValue given")
 	}
 
+	allowedQueryAggregators := []string{avgString, maxString}
+
+	if val, ok := config.TriggerMetadata["queryAggregator"]; ok && val != "" {
+		queryAggregator := strings.ToLower(val)
+		_, found := kedautil.FindStringInSlice(allowedQueryAggregators, queryAggregator)
+		if found {
+			meta.queryAggegrator = queryAggregator
+		} else {
+			return nil, fmt.Errorf("queryAggregator has to be one of %+q", queryAggregator)
+		}
+	} else {
+		meta.queryAggegrator = maxString
+	}
+
 	meta.activationQueryValue = 0
 	if val, ok := config.TriggerMetadata["activationQueryValue"]; ok {
 		activationQueryValue, err := strconv.ParseFloat(val, 64)
@@ -134,7 +152,7 @@ func parseDatadogMetadata(config *ScalerConfig) (*datadogMetadata, error) {
 		}
 		val = strings.ToLower(val)
 		switch val {
-		case "average":
+		case avgString:
 			meta.vType = v2beta2.AverageValueMetricType
 		case "global":
 			meta.vType = v2beta2.ValueMetricType
@@ -289,36 +307,17 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		}
 		// Return the last point from the series
 		index := len(points) - 1
-		results[i] = float64(*points[index][1])
+		results[i] = *points[index][1]
 	}
 
-	// Todo: Allow user-defined aggregator and/or set default to Max (config)
-	// Todo: Use correct aggregator function here, based on config
-	// Todo: See if there's methods already available for min/max/avg/median etc, without writing our own.
-	// Todo: Add tests
 	// Todo: Update docs with example / info on aggregation
-	// Todo: Changelog
-
-	// Aggregate Results - default Max value:
-	return MaxFromSlices(results)
-}
-
-func MaxFromSlices(results []float64) (float64, error) {
-	max := results[0]
-	for _, result := range results {
-		if result > max {
-			max = result
-		}
+	switch s.metadata.queryAggegrator {
+	case avgString:
+		return kedautil.AvgFloatFromSlice(results), nil
+	default:
+		// Aggregate Results - default Max value:
+		return kedautil.MaxFloatFromSlice(results), nil
 	}
-	return max, nil
-}
-
-func AvgFromSlices(results []float64) (float64, error) {
-	total := 0.0
-	for _, result := range results {
-		total += result
-	}
-	return total / float64(len(results)), nil
 }
 
 // GetMetricSpecForScaling returns the MetricSpec for the Horizontal Pod Autoscaler
