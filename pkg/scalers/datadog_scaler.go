@@ -310,7 +310,6 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		results[i] = *points[index][1]
 	}
 
-	// Todo: Update docs with example / info on aggregation
 	switch s.metadata.queryAggegrator {
 	case avgString:
 		return kedautil.AvgFloatFromSlice(results), nil
