@@ -117,7 +117,7 @@ func parseDatadogMetadata(config *ScalerConfig) (*datadogMetadata, error) {
 
 	if val, ok := config.TriggerMetadata["queryAggregator"]; ok && val != "" {
 		queryAggregator := strings.ToLower(val)
-		_, found := kedautil.FindStringInSlice(allowedQueryAggregators, queryAggregator)
+		_, found := FindStringInSlice(allowedQueryAggregators, queryAggregator)
 		if found {
 			meta.queryAggegrator = queryAggregator
 		} else {
@@ -310,13 +310,14 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		results[i] = *points[index][1]
 	}
 
-	switch s.metadata.queryAggegrator {
-	case avgString:
-		return kedautil.AvgFloatFromSlice(results), nil
-	default:
-		// Aggregate Results - default Max value:
-		return kedautil.MaxFloatFromSlice(results), nil
-	}
+	return -1, fmt.Errorf("DEBUG: %v", s.metadata.queryAggegrator)
+	// switch s.metadata.queryAggegrator {
+	// case avgString:
+	// 	return AvgFloatFromSlice(results), nil
+	// default:
+	// 	// Aggregate Results - default Max value:
+	// 	return MaxFloatFromSlice(results), nil
+	// }
 }
 
 // GetMetricSpecForScaling returns the MetricSpec for the Horizontal Pod Autoscaler
@@ -344,4 +345,35 @@ func (s *datadogScaler) GetMetrics(ctx context.Context, metricName string, metri
 	metric := GenerateMetricInMili(metricName, num)
 
 	return append([]external_metrics.ExternalMetricValue{}, metric), nil
+}
+
+// Takes a slice of strings, and looks for a string in it. If found it will
+// return it's key/index, otherwise it will return -1 and a bool of false.
+func FindStringInSlice(slice []string, val string) (int, bool) {
+	for i, item := range slice {
+		if item == val {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+// Find the largest value in a slice of floats
+func MaxFloatFromSlice(results []float64) float64 {
+	max := results[0]
+	for _, result := range results {
+		if result > max {
+			max = result
+		}
+	}
+	return max
+}
+
+// Find the average value in a slice of floats
+func AvgFloatFromSlice(results []float64) float64 {
+	total := 0.0
+	for _, result := range results {
+		total += result
+	}
+	return total / float64(len(results))
 }
