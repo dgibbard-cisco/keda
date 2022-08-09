@@ -310,14 +310,13 @@ func (s *datadogScaler) getQueryResult(ctx context.Context) (float64, error) {
 		results[i] = *points[index][1]
 	}
 
-	return -1, fmt.Errorf("DEBUG: %v", s.metadata.queryAggegrator)
-	// switch s.metadata.queryAggegrator {
-	// case avgString:
-	// 	return AvgFloatFromSlice(results), nil
-	// default:
-	// 	// Aggregate Results - default Max value:
-	// 	return MaxFloatFromSlice(results), nil
-	// }
+	switch s.metadata.queryAggegrator {
+	case avgString:
+		return AvgFloatFromSlice(results), nil
+	default:
+		// Aggregate Results - default Max value:
+		return MaxFloatFromSlice(results), nil
+	}
 }
 
 // GetMetricSpecForScaling returns the MetricSpec for the Horizontal Pod Autoscaler
