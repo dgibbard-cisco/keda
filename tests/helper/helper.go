@@ -7,10 +7,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"text/template"
@@ -201,6 +202,22 @@ func DeleteNamespace(t *testing.T, kc *kubernetes.Clientset, nsName string) {
 	assert.NoErrorf(t, err, "cannot delete kubernetes namespace - %s", err)
 }
 
+func WaitForJobSuccess(t *testing.T, kc *kubernetes.Clientset, jobName, namespace string, iterations, interval int) bool {
+	for i := 0; i < iterations; i++ {
+		job, err := kc.BatchV1().Jobs(namespace).Get(context.Background(), jobName, metav1.GetOptions{})
+		if err != nil {
+			t.Logf("cannot run job - %s", err)
+		}
+
+		if job.Status.Succeeded > 0 {
+			t.Logf("job %s ran successfully!", jobName)
+			return true // Job ran successfully
+		}
+		time.Sleep(time.Duration(interval) * time.Second)
+	}
+	return false
+}
+
 func WaitForNamespaceDeletion(t *testing.T, kc *kubernetes.Clientset, nsName string) bool {
 	for i := 0; i < 30; i++ {
 		t.Logf("waiting for namespace %s deletion", nsName)
@@ -230,6 +247,29 @@ func WaitForJobCount(t *testing.T, kc *kubernetes.Clientset, namespace string,
 	}
 
 	return false
+}
+
+func WaitForJobCountUntilIteration(t *testing.T, kc *kubernetes.Clientset, namespace string,
+	target, iterations, intervalSeconds int) bool {
+	var isTargetAchieved = false
+
+	for i := 0; i < iterations; i++ {
+		jobList, _ := kc.BatchV1().Jobs(namespace).List(context.Background(), metav1.ListOptions{})
+		count := len(jobList.Items)
+
+		t.Logf("Waiting for job count to hit target. Namespace - %s, Current  - %d, Target - %d",
+			namespace, count, target)
+
+		if count == target {
+			isTargetAchieved = true
+		} else {
+			isTargetAchieved = false
+		}
+
+		time.Sleep(time.Duration(intervalSeconds) * time.Second)
+	}
+
+	return isTargetAchieved
 }
 
 // Waits until deployment count hits target or number of iterations are done.
@@ -316,12 +356,14 @@ func WaitForDeploymentReplicaCountChange(t *testing.T, kc *kubernetes.Clientset,
 
 // Waits some time to ensure that the replica count doesn't change.
 func AssertReplicaCountNotChangeDuringTimePeriod(t *testing.T, kc *kubernetes.Clientset, name, namespace string, target, intervalSeconds int) {
-	t.Log("Waiting for some time to ensure deployment replica count doesn't change")
+	t.Logf("Waiting for some time to ensure deployment replica count doesn't change from %d", target)
 	var replicas int32
 
 	for i := 0; i < intervalSeconds; i++ {
 		deployment, _ := kc.AppsV1().Deployments(namespace).Get(context.Background(), name, metav1.GetOptions{})
 		replicas = deployment.Status.Replicas
+
+		t.Logf("Deployment - %s, Current  - %d", name, replicas)
 
 		if replicas != int32(target) {
 			assert.Fail(t, fmt.Sprintf("%s replica count has changed from %d to %d", name, target, replicas))
@@ -363,7 +405,7 @@ func KubectlApplyWithTemplate(t *testing.T, data interface{}, templateName strin
 	tmpl, err := template.New("kubernetes resource template").Parse(config)
 	assert.NoErrorf(t, err, "cannot parse template - %s", err)
 
-	tempFile, err := ioutil.TempFile("", templateName)
+	tempFile, err := os.CreateTemp("", templateName)
 	assert.NoErrorf(t, err, "cannot create temp file - %s", err)
 
 	defer os.Remove(tempFile.Name())
@@ -390,7 +432,7 @@ func KubectlDeleteWithTemplate(t *testing.T, data interface{}, templateName, con
 	tmpl, err := template.New("kubernetes resource template").Parse(config)
 	assert.NoErrorf(t, err, "cannot parse template - %s", err)
 
-	tempFile, err := ioutil.TempFile("", templateName)
+	tempFile, err := os.CreateTemp("", templateName)
 	assert.NoErrorf(t, err, "cannot delete temp file - %s", err)
 
 	defer os.Remove(tempFile.Name())
@@ -425,4 +467,43 @@ func DeleteKubernetesResources(t *testing.T, kc *kubernetes.Clientset, nsName st
 
 func GetRandomNumber() int {
 	return random.Intn(10000)
+}
+
+func RemoveANSI(input string) string {
+	reg := regexp.MustCompile(`(\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]`)
+	return reg.ReplaceAllString(input, "")
+}
+
+func FindPodLogs(t *testing.T, kc *kubernetes.Clientset, namespace, label string) []string {
+	var podLogs []string
+	t.Logf("Searching for pod logs.........")
+	pods, err := kc.CoreV1().Pods(namespace).List(context.TODO(),
+		metav1.ListOptions{LabelSelector: label})
+	if err != nil {
+		assert.NoErrorf(t, err, "no pod in the list - %s", err)
+	}
+	var podLogRequest *rest.Request
+	for _, v := range pods.Items {
+		podLogRequest = kc.CoreV1().Pods(namespace).GetLogs(v.Name, &corev1.PodLogOptions{})
+		stream, err := podLogRequest.Stream(context.TODO())
+		if err != nil {
+			assert.NoErrorf(t, err, "cannot open the stream - %s", err)
+		}
+		defer stream.Close()
+		for {
+			buf := make([]byte, 2000)
+			numBytes, err := stream.Read(buf)
+			if err == io.EOF {
+				break
+			}
+			if numBytes == 0 {
+				continue
+			}
+			if err != nil {
+				assert.NoErrorf(t, err, "cannot read log stream - %s", err)
+			}
+			podLogs = append(podLogs, string(buf[:numBytes]))
+		}
+	}
+	return podLogs
 }

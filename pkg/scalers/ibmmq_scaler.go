@@ -6,12 +6,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
+	"github.com/go-logr/logr"
 	v2beta2 "k8s.io/api/autoscaling/v2beta2"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/metrics/pkg/apis/external_metrics"
@@ -30,6 +31,7 @@ type IBMMQScaler struct {
 	metricType         v2beta2.MetricTargetType
 	metadata           *IBMMQMetadata
 	defaultHTTPTimeout time.Duration
+	logger             logr.Logger
 }
 
 // IBMMQMetadata Metadata used by KEDA to query IBM MQ queue depth and scale
@@ -76,6 +78,7 @@ func NewIBMMQScaler(config *ScalerConfig) (Scaler, error) {
 		metricType:         metricType,
 		metadata:           meta,
 		defaultHTTPTimeout: config.GlobalHTTPTimeout,
+		logger:             InitializeLogger(config, "ibm_mq_scaler"),
 	}, nil
 }
 
@@ -197,7 +200,7 @@ func (s *IBMMQScaler) getQueueDepthViaHTTP(ctx context.Context) (int64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, fmt.Errorf("failed to ready body of request: %s", err)
 	}

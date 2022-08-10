@@ -306,14 +306,15 @@ func (h *scaleHandler) buildScalers(ctx context.Context, withTriggers *kedav1alp
 				}
 			}
 			config := &scalers.ScalerConfig{
-				Name:              withTriggers.Name,
-				Namespace:         withTriggers.Namespace,
-				TriggerMetadata:   trigger.Metadata,
-				ResolvedEnv:       resolvedEnv,
-				AuthParams:        make(map[string]string),
-				GlobalHTTPTimeout: h.globalHTTPTimeout,
-				ScalerIndex:       triggerIndex,
-				MetricType:        trigger.MetricType,
+				ScalableObjectName:      withTriggers.Name,
+				ScalableObjectNamespace: withTriggers.Namespace,
+				ScalableObjectType:      withTriggers.Kind,
+				TriggerMetadata:         trigger.Metadata,
+				ResolvedEnv:             resolvedEnv,
+				AuthParams:              make(map[string]string),
+				GlobalHTTPTimeout:       h.globalHTTPTimeout,
+				ScalerIndex:             triggerIndex,
+				MetricType:              trigger.MetricType,
 			}
 
 			config.AuthParams, config.PodIdentity, err = resolver.ResolveAuthRefAndPodIdentity(ctx, h.client, logger, trigger.AuthenticationRef, podTemplateSpec, withTriggers.Namespace)
@@ -428,6 +429,8 @@ func buildScaler(ctx context.Context, client client.Client, triggerType string, 
 		return scalers.NewMSSQLScaler(config)
 	case "mysql":
 		return scalers.NewMySQLScaler(config)
+	case "nats-jetstream":
+		return scalers.NewNATSJetStreamScaler(config)
 	case "new-relic":
 		return scalers.NewNewRelicScaler(config)
 	case "openstack-metric":
@@ -440,6 +443,8 @@ func buildScaler(ctx context.Context, client client.Client, triggerType string, 
 		return scalers.NewPredictKubeScaler(ctx, config)
 	case "prometheus":
 		return scalers.NewPrometheusScaler(config)
+	case "pulsar":
+		return scalers.NewPulsarScaler(config)
 	case "rabbitmq":
 		return scalers.NewRabbitMQScaler(config)
 	case "redis":

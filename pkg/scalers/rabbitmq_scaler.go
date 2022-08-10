@@ -4,18 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/streadway/amqp"
 	v2beta2 "k8s.io/api/autoscaling/v2beta2"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/metrics/pkg/apis/external_metrics"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	kedautil "github.com/kedacore/keda/v2/pkg/util"
 )
@@ -27,14 +27,15 @@ func init() {
 }
 
 const (
-	rabbitQueueLengthMetricName  = "queueLength"
-	rabbitModeTriggerConfigName  = "mode"
-	rabbitValueTriggerConfigName = "value"
-	rabbitModeQueueLength        = "QueueLength"
-	rabbitModeMessageRate        = "MessageRate"
-	defaultRabbitMQQueueLength   = 20
-	rabbitMetricType             = "External"
-	rabbitRootVhostPath          = "/%2F"
+	rabbitQueueLengthMetricName            = "queueLength"
+	rabbitModeTriggerConfigName            = "mode"
+	rabbitValueTriggerConfigName           = "value"
+	rabbitActivationValueTriggerConfigName = "activationValue"
+	rabbitModeQueueLength                  = "QueueLength"
+	rabbitModeMessageRate                  = "MessageRate"
+	defaultRabbitMQQueueLength             = 20
+	rabbitMetricType                       = "External"
+	rabbitRootVhostPath                    = "/%2F"
 )
 
 const (
@@ -57,12 +58,14 @@ type rabbitMQScaler struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
 	httpClient *http.Client
+	logger     logr.Logger
 }
 
 type rabbitMQMetadata struct {
 	queueName             string
 	mode                  string        // QueueLength or MessageRate
 	value                 float64       // trigger value (queue length or publish/sec. rate)
+	activationValue       float64       // activation value
 	host                  string        // connection string for either HTTP or AMQP protocol
 	protocol              string        // either http or amqp protocol
 	vhostName             *string       // override the vhost from the connection info
@@ -96,8 +99,6 @@ type publishDetail struct {
 	Rate float64 `json:"rate"`
 }
 
-var rabbitmqLog = logf.Log.WithName("rabbitmq_scaler")
-
 // NewRabbitMQScaler creates a new rabbitMQ scaler
 func NewRabbitMQScaler(config *ScalerConfig) (Scaler, error) {
 	s := &rabbitMQScaler{}
@@ -107,6 +108,8 @@ func NewRabbitMQScaler(config *ScalerConfig) (Scaler, error) {
 		return nil, fmt.Errorf("error getting scaler metric type: %s", err)
 	}
 	s.metricType = metricType
+
+	s.logger = InitializeLogger(config, "rabbitmq_scaler")
 
 	meta, err := parseRabbitMQMetadata(config)
 	if err != nil {
@@ -286,6 +289,7 @@ func parseTrigger(meta *rabbitMQMetadata, config *ScalerConfig) (*rabbitMQMetada
 	deprecatedQueueLengthValue, deprecatedQueueLengthPresent := config.TriggerMetadata[rabbitQueueLengthMetricName]
 	mode, modePresent := config.TriggerMetadata[rabbitModeTriggerConfigName]
 	value, valuePresent := config.TriggerMetadata[rabbitValueTriggerConfigName]
+	activationValue, activationValuePresent := config.TriggerMetadata[rabbitActivationValueTriggerConfigName]
 
 	// Initialize to default trigger settings
 	meta.mode = rabbitModeQueueLength
@@ -299,6 +303,15 @@ func parseTrigger(meta *rabbitMQMetadata, config *ScalerConfig) (*rabbitMQMetada
 	// Only allow one of `queueLength` or `mode`/`value`
 	if deprecatedQueueLengthPresent && (modePresent || valuePresent) {
 		return nil, fmt.Errorf("queueLength is deprecated; configure only %s and %s", rabbitModeTriggerConfigName, rabbitValueTriggerConfigName)
+	}
+
+	// Parse activation value
+	if activationValuePresent {
+		activation, err := strconv.ParseFloat(activationValue, 64)
+		if err != nil {
+			return nil, fmt.Errorf("can't parse %s: %s", rabbitActivationValueTriggerConfigName, err)
+		}
+		meta.activationValue = activation
 	}
 
 	// Parse deprecated `queueLength` value
@@ -361,7 +374,7 @@ func (s *rabbitMQScaler) Close(context.Context) error {
 	if s.connection != nil {
 		err := s.connection.Close()
 		if err != nil {
-			rabbitmqLog.Error(err, "Error closing rabbitmq connection")
+			s.logger.Error(err, "Error closing rabbitmq connection")
 			return err
 		}
 	}
@@ -376,9 +389,9 @@ func (s *rabbitMQScaler) IsActive(ctx context.Context) (bool, error) {
 	}
 
 	if s.metadata.mode == rabbitModeQueueLength {
-		return messages > 0, nil
+		return float64(messages) > s.metadata.activationValue, nil
 	}
-	return publishRate > 0 || messages > 0, nil
+	return publishRate > s.metadata.activationValue || float64(messages) > s.metadata.activationValue, nil
 }
 
 func (s *rabbitMQScaler) getQueueStatus() (int64, float64, error) {
@@ -430,7 +443,7 @@ func getJSON(s *rabbitMQScaler, url string) (queueInfo, error) {
 		return result, err
 	}
 
-	body, _ := ioutil.ReadAll(r.Body)
+	body, _ := io.ReadAll(r.Body)
 	return result, fmt.Errorf("error requesting rabbitMQ API status: %s, response: %s, from: %s", r.Status, body, url)
 }
 
